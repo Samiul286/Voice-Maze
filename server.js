@@ -153,9 +153,11 @@ app.prepare().then(() => {
         });
 
         socket.on('start-game', (lobbyId) => {
+            console.log(`[SERVER] Start game requested for lobby: ${lobbyId}`);
             if (games[lobbyId]) {
                 const game = games[lobbyId];
                 const playerIds = Object.keys(game.players);
+                console.log(`[SERVER] Players in lobby: ${playerIds.length}`);
 
                 for (let i = playerIds.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
@@ -164,6 +166,9 @@ app.prepare().then(() => {
 
                 playerIds.forEach((id, index) => {
                     game.players[id].role = index === 0 ? 'leader' : 'walker';
+                    game.players[id].keys = 0;
+                    game.players[id].x = 0;
+                    game.players[id].y = 0;
                 });
 
                 game.rotationOrder = playerIds;
@@ -171,12 +176,21 @@ app.prepare().then(() => {
                 game.status = 'playing';
                 game.level = 1;
                 game.lives = 5;
-                game.maze = generateMaze(game.config.width, game.config.height);
+                console.log(`[SERVER] Generating maze...`);
+                try {
+                    game.maze = generateMaze(game.config.width, game.config.height);
+                    console.log(`[SERVER] Maze generated successfully`);
+                } catch (err) {
+                    console.error(`[SERVER] Maze generation failed:`, err);
+                }
                 game.startTime = Date.now();
                 game.timeLimit = 120;
 
                 startGameTimers(game, lobbyId);
                 io.to(lobbyId).emit('game-started', game);
+                console.log(`[SERVER] game-started emitted to lobby: ${lobbyId}`);
+            } else {
+                console.log(`[SERVER] Lobby ${lobbyId} not found`);
             }
         });
 
