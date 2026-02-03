@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, Users, Timer, Map as MapIcon, ChevronRight, Heart, Skull, Trophy, RotateCcw, Lock, Unlock, Zap } from 'lucide-react';
+import { Mic, Users, Timer, Map as MapIcon, ChevronRight, Heart, Skull, Trophy, RotateCcw, Lock, Unlock, Zap, Key } from 'lucide-react';
 import { useVoiceChat } from '@/hooks/useVoiceChat';
 
 export default function GameView({ lobbyData, lobbyId, socket }: any) {
@@ -16,7 +16,10 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
     const [showTrapMessage, setShowTrapMessage] = useState(false);
     const [showWallMessage, setShowWallMessage] = useState(false);
     const [showSwitchMessage, setShowSwitchMessage] = useState(false);
+    const [showKeyMessage, setShowKeyMessage] = useState(false);
+    const [showDoorMessage, setShowDoorMessage] = useState(false);
     const [lives, setLives] = useState(lobbyData.lives ?? 5);
+    const [myKeys, setMyKeys] = useState(0);
     const [gameState, setGameState] = useState<'playing' | 'lost' | 'won'>(lobbyData.status === 'lost' ? 'lost' : 'playing');
     const [lossReason, setLossReason] = useState<'time-out' | 'traps' | null>(null);
     const PLAYER_SIZE = 24;
@@ -108,8 +111,12 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
         const targetCell = maze[newY][newX];
 
         if (targetCell.type === 'door') {
-            if (!isLeader) playSound('collision');
-            return;
+            if (myPlayer.keys > 0) {
+                // Key will be consumed on server
+            } else {
+                if (!isLeader) playSound('collision');
+                return;
+            }
         }
 
         if (targetCell.type === 'trap') {
@@ -127,9 +134,7 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
             socket.emit('player-on-exit', { lobbyId, x: newX, y: newY });
         }
 
-        if (targetCell.type === 'switch') {
-            socket.emit('activate-switch', lobbyId);
-        }
+        // Keys and doors are handled by 'move' result or maze updates from server
 
         socket.emit('move', { lobbyId, x: newX, y: newY });
         setPlayers((prev: any) => ({
@@ -152,11 +157,14 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
     }, [movePlayer, isLeader]);
 
     useEffect(() => {
-        socket.on('player-moved', ({ id, x, y }: any) => {
-            if (id === socket.id) return; // Prevent jitter by ignoring own updates
+        socket.on('player-moved', ({ id, x, y, keys }: any) => {
+            if (id === socket.id) {
+                if (keys !== undefined) setMyKeys(keys);
+                return;
+            }
             setPlayers((prev: any) => ({
                 ...prev,
-                [id]: { ...prev[id], x, y }
+                [id]: { ...prev[id], x, y, keys }
             }));
         });
 
@@ -185,11 +193,29 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
             if (data.lives !== undefined) setLives(data.lives);
         });
 
+        socket.on('key-collected', ({ playerId, keys }: any) => {
+            if (playerId === socket.id) {
+                setMyKeys(keys);
+                setShowKeyMessage(true);
+                setTimeout(() => setShowKeyMessage(false), 2000);
+            }
+        });
+
+        socket.on('door-opened', ({ playerId, keys }: any) => {
+            if (playerId === socket.id) {
+                setMyKeys(keys);
+                setShowDoorMessage(true);
+                setTimeout(() => setShowDoorMessage(false), 2000);
+            }
+        });
+
         return () => {
             socket.off('player-moved');
             socket.off('lives-update');
             socket.off('game-over');
             socket.off('update-lobby');
+            socket.off('key-collected');
+            socket.off('door-opened');
         };
     }, [socket]);
 
@@ -303,14 +329,18 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
                             ctx.lineWidth = 2;
                             ctx.strokeRect(px + 4, py + 4, tileSize - 8, tileSize - 8);
                         }
-                        // Switch
-                        if (cell.type === 'switch') {
-                            ctx.fillStyle = '#8b5cf6'; // Purple
+                        // Key
+                        if (cell.type === 'key') {
+                            ctx.fillStyle = '#f59e0b'; // Amber
+                            // Draw a small key shape
+                            const cx = px + tileSize / 2;
+                            const cy = py + tileSize / 2;
                             ctx.beginPath();
-                            ctx.moveTo(px + tileSize / 2, py + tileSize / 4);
-                            ctx.lineTo(px + tileSize * 0.75, py + tileSize * 0.75);
-                            ctx.lineTo(px + tileSize * 0.25, py + tileSize * 0.75);
-                            ctx.fill();
+                            ctx.arc(cx - 4, cy, 4, 0, Math.PI * 2);
+                            ctx.stroke();
+                            ctx.fillRect(cx, cy - 1, 8, 2);
+                            ctx.fillRect(cx + 4, cy, 1, 4);
+                            ctx.fillRect(cx + 7, cy, 1, 4);
                         }
 
                         // Show traps if visible (Only Leader sees traps)
@@ -428,14 +458,24 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
                         🌀 WALLS SHIFTED!
                     </motion.div>
                 )}
-                {showSwitchMessage && (
+                {showKeyMessage && (
                     <motion.div
                         initial={{ opacity: 0, y: -50 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -50 }}
-                        className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-yellow-500 text-white px-8 py-4 rounded-2xl cartoon-border font-black text-2xl shadow-2xl flex items-center gap-4"
+                        className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-white px-8 py-4 rounded-2xl cartoon-border font-black text-2xl shadow-2xl flex items-center gap-4"
                     >
-                        🔓 CLICK! DOORS OPEN!
+                        🔑 KEY COLLECTED!
+                    </motion.div>
+                )}
+                {showDoorMessage && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -50 }}
+                        className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-emerald-500 text-white px-8 py-4 rounded-2xl cartoon-border font-black text-2xl shadow-2xl flex items-center gap-4"
+                    >
+                        🔓 DOOR UNLOCKED!
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -465,6 +505,12 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
                     <div className="bg-white p-2 md:p-4 rounded-xl md:rounded-2xl cartoon-border flex items-center gap-2 text-red-500">
                         <Heart size={20} className="fill-current" />
                         <span className="text-xl md:text-3xl font-black">{lives}</span>
+                    </div>
+
+                    {/* Keys */}
+                    <div className="bg-white p-2 md:p-4 rounded-xl md:rounded-2xl cartoon-border flex items-center gap-2 text-amber-500">
+                        <Key size={20} className="fill-current" />
+                        <span className="text-xl md:text-3xl font-black">{myKeys}</span>
                     </div>
 
                     {/* Timer */}

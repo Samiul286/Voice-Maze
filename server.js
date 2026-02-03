@@ -85,7 +85,11 @@ app.prepare().then(() => {
                         const players = Object.values(game.players);
                         for (const player of players) {
                             if (player.role === 'walker') {
-                                const path = findPath(game.maze, width, height, { x: player.x, y: player.y }, exitCoords);
+                                // FIX: Include 'door' in blockTypes for pathfinding during wall shifts
+                                // This prevents trapping players behind doors they may not have keys for.
+                                // However, if they HAVE a key, the door should technically be reachable.
+                                // To be safe, we treat doors as blocks here unless they are open.
+                                const path = findPath(game.maze, width, height, { x: player.x, y: player.y }, exitCoords, ['door']);
                                 if (path.length === 0) {
                                     allValid = false;
                                     break;
@@ -95,7 +99,7 @@ app.prepare().then(() => {
 
                         // 2. Check if start is still connected to exit (for future players/respawns)
                         if (allValid) {
-                            const pathFromStart = findPath(game.maze, width, height, { x: 0, y: 0 }, exitCoords);
+                            const pathFromStart = findPath(game.maze, width, height, { x: 0, y: 0 }, exitCoords, ['door']);
                             if (pathFromStart.length === 0) allValid = false;
                         }
 
@@ -197,10 +201,34 @@ app.prepare().then(() => {
         });
 
         socket.on('move', ({ lobbyId, x, y }) => {
-            if (games[lobbyId] && games[lobbyId].players[socket.id] && games[lobbyId].status === 'playing') {
-                games[lobbyId].players[socket.id].x = x;
-                games[lobbyId].players[socket.id].y = y;
-                socket.to(lobbyId).emit('player-moved', { id: socket.id, x, y });
+            const game = games[lobbyId];
+            if (game && game.players[socket.id] && game.status === 'playing') {
+                const player = game.players[socket.id];
+                const targetCell = game.maze[y]?.[x];
+
+                if (!targetCell) return;
+
+                // Handle interactive tiles
+                if (targetCell.type === 'key') {
+                    targetCell.type = 'empty';
+                    player.keys = (player.keys || 0) + 1;
+                    io.to(lobbyId).emit('maze-update', game.maze);
+                    io.to(lobbyId).emit('key-collected', { playerId: socket.id, keys: player.keys });
+                } else if (targetCell.type === 'door') {
+                    if (player.keys > 0) {
+                        player.keys--;
+                        targetCell.type = 'open_door';
+                        io.to(lobbyId).emit('maze-update', game.maze);
+                        io.to(lobbyId).emit('door-opened', { playerId: socket.id, keys: player.keys });
+                    } else {
+                        // Prevent moving into a closed door without a key
+                        return;
+                    }
+                }
+
+                player.x = x;
+                player.y = y;
+                socket.to(lobbyId).emit('player-moved', { id: socket.id, x, y, keys: player.keys });
             }
         });
 
@@ -253,19 +281,7 @@ app.prepare().then(() => {
             }
         });
 
-        socket.on('activate-switch', (lobbyId) => {
-            const game = games[lobbyId];
-            if (game && game.status === 'playing') {
-                game.maze.forEach(row => {
-                    row.forEach(cell => {
-                        if (cell.type === 'door') cell.type = 'open_door';
-                        else if (cell.type === 'open_door') cell.type = 'door';
-                    });
-                });
-                io.to(lobbyId).emit('maze-update', game.maze);
-                io.to(lobbyId).emit('switch-activated');
-            }
-        });
+        // Removed activate-switch in favor of automatic key/door logic in 'move'
 
         socket.on('voice-signal', ({ to, from, signal }) => {
             io.to(to).emit('voice-signal', { from, signal });
