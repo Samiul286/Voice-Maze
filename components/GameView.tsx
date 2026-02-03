@@ -7,8 +7,8 @@ import { useVoiceChat } from '@/hooks/useVoiceChat';
 
 export default function GameView({ lobbyData, lobbyId, socket }: any) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const { peers } = useVoiceChat(socket, lobbyId);
     const [players, setPlayers] = useState<any>(lobbyData.players || {});
+    const { peers, isMuted, toggleMic } = useVoiceChat(socket, lobbyId, players);
     const [maze, setMaze] = useState(lobbyData.maze);
     const [myPlayerId, setMyPlayerId] = useState(socket.id);
     const [timeRemaining, setTimeRemaining] = useState(0);
@@ -20,6 +20,39 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
     const [gameState, setGameState] = useState<'playing' | 'lost' | 'won'>(lobbyData.status === 'lost' ? 'lost' : 'playing');
     const [lossReason, setLossReason] = useState<'time-out' | 'traps' | null>(null);
     const PLAYER_SIZE = 24;
+
+    const playSound = useCallback((type: 'collision' | 'trap') => {
+        try {
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            if (!AudioContextClass) return;
+            const audioCtx = new AudioContextClass();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'collision') {
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'trap') {
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(110, audioCtx.currentTime + 0.3);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.3);
+            }
+        } catch (e) {
+            console.warn("Sound playback failed:", e);
+        }
+    }, []);
 
     // Reset local state when lobbyData changes (e.g. Next Level)
     useEffect(() => {
@@ -56,26 +89,33 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
         const newY = player.y + dy;
 
         // Check boundaries
-        if (newX < 0 || newX >= maze[0].length || newY < 0 || newY >= maze.length) return;
+        if (newX < 0 || newX >= maze[0].length || newY < 0 || newY >= maze.length) {
+            if (!isLeader) playSound('collision');
+            return;
+        }
 
         // Check walls
         const currentCell = maze[player.y][player.x];
-        if (dx === 1 && currentCell.walls.right) return;
-        if (dx === -1 && currentCell.walls.left) return;
-        if (dy === 1 && currentCell.walls.bottom) return;
-        if (dy === -1 && currentCell.walls.top) return;
+        if ((dx === 1 && currentCell.walls.right) ||
+            (dx === -1 && currentCell.walls.left) ||
+            (dy === 1 && currentCell.walls.bottom) ||
+            (dy === -1 && currentCell.walls.top)) {
+            if (!isLeader) playSound('collision');
+            return;
+        }
 
         // Check Traps/Exit/Doors/Switches
         const targetCell = maze[newY][newX];
 
         if (targetCell.type === 'door') {
-            // Block movement
+            if (!isLeader) playSound('collision');
             return;
         }
 
         if (targetCell.type === 'trap') {
             setShowTrapMessage(true);
             setTimeout(() => setShowTrapMessage(false), 2000);
+            if (!isLeader) playSound('trap');
 
             socket.emit('hit-trap', lobbyId);
             socket.emit('move', { lobbyId, x: 0, y: 0 });
@@ -406,7 +446,16 @@ export default function GameView({ lobbyData, lobbyId, socket }: any) {
                         <div key={p.id} className="flex items-center gap-2 bg-white p-1.5 px-3 rounded-xl cartoon-border">
                             <div className="w-2 h-2 md:w-3 md:h-3 rounded-full" style={{ backgroundColor: p.color }} />
                             <span className="font-bold text-[10px] md:text-sm uppercase">{p.name} {p.id === myPlayerId && '(You)'}</span>
-                            <Mic size={12} className="text-gray-300" />
+                            {p.id === myPlayerId ? (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); toggleMic(); }}
+                                    className={`p-1 rounded-lg transition-all active:scale-95 ${isMuted ? 'text-red-500 bg-red-50' : 'text-green-500 bg-green-50'}`}
+                                >
+                                    <Mic size={14} strokeWidth={isMuted ? 3 : 2} />
+                                </button>
+                            ) : (
+                                <Mic size={12} className="text-gray-300" />
+                            )}
                         </div>
                     ))}
                 </div>

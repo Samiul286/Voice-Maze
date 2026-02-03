@@ -113,6 +113,7 @@ app.prepare().then(() => {
             };
 
             io.to(lobbyId).emit('update-lobby', games[lobbyId]);
+            socket.to(lobbyId).emit('user-joined-voice', socket.id);
         });
 
         socket.on('start-game', (lobbyId) => {
