@@ -19,7 +19,7 @@ app.prepare().then(() => {
         }
     });
 
-    const { generateMaze } = require('./lib/maze-gen');
+    const { generateMaze, findPath } = require('./lib/maze-gen');
     // Game state management
     const games = {};
     const gameIntervals = {}; // Store intervals for each game
@@ -50,30 +50,62 @@ app.prepare().then(() => {
                 const width = game.config.width;
                 const height = game.config.height;
 
-                for (let k = 0; k < 5; k++) {
+                for (let k = 0; k < 10; k++) { // Try 10 times to find 5 valid changes
+                    if (changes >= 5) break;
+
                     const rx = Math.floor(Math.random() * width);
                     const ry = Math.floor(Math.random() * height);
-                    if (rx + ry < 3) continue;
-                    if (rx === width - 1 && ry === height - 1) continue;
+                    if (rx + ry < 2) continue; // Keep start clear
+                    if (rx === width - 1 && ry === height - 1) continue; // Keep exit clear
 
                     const cell = game.maze[ry][rx];
                     const dirs = ['top', 'right', 'bottom', 'left'];
                     const dir = dirs[Math.floor(Math.random() * dirs.length)];
 
                     let neighbor = null;
-                    if (dir === 'top' && ry > 0) neighbor = game.maze[ry - 1][rx];
-                    if (dir === 'right' && rx < width - 1) neighbor = game.maze[ry][rx + 1];
-                    if (dir === 'bottom' && ry < height - 1) neighbor = game.maze[ry + 1][rx];
-                    if (dir === 'left' && rx > 0) neighbor = game.maze[ry][rx - 1];
+                    let nx = rx, ny = ry;
+                    if (dir === 'top' && ry > 0) { neighbor = game.maze[ry - 1][rx]; ny--; }
+                    if (dir === 'right' && rx < width - 1) { neighbor = game.maze[ry][rx + 1]; nx++; }
+                    if (dir === 'bottom' && ry < height - 1) { neighbor = game.maze[ry + 1][rx]; ny++; }
+                    if (dir === 'left' && rx > 0) { neighbor = game.maze[ry][rx - 1]; nx--; }
 
                     if (neighbor) {
                         const isWall = cell.walls[dir];
+
+                        // "What-if" check: Apply change temporarily
                         cell.walls[dir] = !isWall;
-                        if (dir === 'top') neighbor.walls.bottom = !isWall;
-                        if (dir === 'right') neighbor.walls.left = !isWall;
-                        if (dir === 'bottom') neighbor.walls.top = !isWall;
-                        if (dir === 'left') neighbor.walls.right = !isWall;
-                        changes++;
+                        const reverseDir = { 'top': 'bottom', 'right': 'left', 'bottom': 'top', 'left': 'right' }[dir];
+                        neighbor.walls[reverseDir] = !isWall;
+
+                        // Check if ALL players still have a path to the exit
+                        const exitCoords = { x: width - 1, y: height - 1 };
+                        let allValid = true;
+
+                        // 1. Check current players
+                        const players = Object.values(game.players);
+                        for (const player of players) {
+                            if (player.role === 'walker') {
+                                const path = findPath(game.maze, width, height, { x: player.x, y: player.y }, exitCoords);
+                                if (path.length === 0) {
+                                    allValid = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // 2. Check if start is still connected to exit (for future players/respawns)
+                        if (allValid) {
+                            const pathFromStart = findPath(game.maze, width, height, { x: 0, y: 0 }, exitCoords);
+                            if (pathFromStart.length === 0) allValid = false;
+                        }
+
+                        if (allValid) {
+                            changes++;
+                        } else {
+                            // Revert change if it traps anyone
+                            cell.walls[dir] = isWall;
+                            neighbor.walls[reverseDir] = isWall;
+                        }
                     }
                 }
 
